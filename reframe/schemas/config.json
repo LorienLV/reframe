@@ -248,7 +248,8 @@
                                     "type": "string",
                                     "enum": [
                                         "local", "pbs", "slurm",
-                                        "sge", "squeue", "torque"
+                                        "sge", "squeue", "torque",
+                                        "pjm"
                                     ]
                                 },
                                 "launcher": {
@@ -370,7 +371,7 @@
                 "properties": {
                     "name": {
                         "type": "string",
-                        "enum": ["local", "pbs", "sge", "slurm", "squeue", "torque"]
+                        "enum": ["local", "pbs", "sge", "slurm", "squeue", "torque", "pjm"]
                     },
                     "ignore_reqnodenotavail": {"type": "boolean"},
                     "resubmit_on_errors": {
