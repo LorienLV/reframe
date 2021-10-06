@@ -56,7 +56,6 @@ def pjm_state_pending(state):
 _run_strict = functools.partial(osext.run_command, check=True)
 
 class _PJMJob(sched.Job):
-    # TODO
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._is_cancelling = False
@@ -68,45 +67,14 @@ class _PJMJob(sched.Job):
 
 @register_scheduler('pjm')
 class PjmJobScheduler(sched.JobScheduler):
-    # This matches the format for both normal jobs as well as job arrays.
-    # For job arrays the job_id has one of the following formats:
-    #   * <job_id>_<array_task_id>
-    #   * <job_id>_[<array_task_id_start>-<array_task_id_end>]
-    # See (`Job Array Support<https://slurm.schedmd.com/job_array.html`__)
-    _state_patt = r'\d+(?:_\d+|_\[\d+-\d+\])?'
-
     def __init__(self):
         self._prefix = '#PJM'
 
-        # TODO
-
-        # Reasons to cancel a pending job: if the job is expected to remain
-        # pending for a much longer time then usual (mostly if a sysadmin
-        # intervention is required)
-        self._cancel_reasons = ['FrontEndDown',
-                                'Licenses',         # May require sysadmin
-                                'NodeDown',
-                                'PartitionDown',
-                                'PartitionInactive',
-                                'PartitionNodeLimit',
-                                'QOSJobLimit',
-                                'QOSResourceLimit',
-                                'QOSUsageThreshold']
-        ignore_reqnodenotavail = rt.runtime().get_option(
-            f'schedulers/@{self.registered_name}/ignore_reqnodenotavail'
-        )
-        if not ignore_reqnodenotavail:
-            self._cancel_reasons.append('ReqNodeNotAvail')
-
-        self._update_state_count = 0
         self._submit_timeout = rt.runtime().get_option(
             f'schedulers/@{self.registered_name}/job_submit_timeout'
         )
         self._use_nodes_opt = rt.runtime().get_option(
             f'schedulers/@{self.registered_name}/use_nodes_option'
-        )
-        self._resubmit_on_errors = rt.runtime().get_option(
-            f'schedulers/@{self.registered_name}/resubmit_on_errors'
         )
 
     def make_job(self, *args, **kwargs):
@@ -116,15 +84,17 @@ class PjmJobScheduler(sched.JobScheduler):
         return self._prefix + ' ' + option
 
     def emit_preamble(self, job):
+        num_tasks_per_node = job.num_tasks_per_node or 1
+        num_cpus_per_task = job.num_cpus_per_task or 1
+
         preamble = [
             self._format_option('-N "%s"' % job.name),
-            self._format_option('-L node=%d' % job.name),
             self._format_option('--mpi "proc=%d,max-proc-per-node=%d"' %
-                                (job.num_tasks, job.num_tasks_per_node))
+                                (job.num_tasks, num_tasks_per_node))
         ]
 
-        outfile_fmt = '-o %s' % job.stdout
-        errfile_fmt = '-e %s' % job.stderr
+        outfile_fmt = '-o "%s"' % job.stdout
+        errfile_fmt = '-e "%s"' % job.stderr
         preamble += [self._format_option(outfile_fmt),
                      self._format_option(errfile_fmt)]
 
@@ -134,19 +104,13 @@ class PjmJobScheduler(sched.JobScheduler):
                 self._format_option('-L elapse=%d:%d:%d' % (h, m, s))
             )
 
-        # I think there is a way to specify this in PJM but I can not find it.
-        # if job.sched_exclusive_access:
-        #     preamble.append(
-        #         self._format_option(job.sched_exclusive_access, '--exclusive')
-        #     )
-
+        # setting -L node >= 1 is the same as --exclusive in SLURM. 
         if self._use_nodes_opt:
-            num_nodes = job.num_tasks // job.num_tasks_per_node
+            num_nodes = job.num_tasks // num_tasks_per_node
             preamble.append(self._format_option('-L node=%d' % num_nodes))
 
-        # TODO PROBAR
         for opt in job.options + job.cli_options:
-            preamble.append(opt)
+            preamble.append(self._format_option(opt))
 
         # Filter out empty statements before returning
         return list(filter(None, preamble))
@@ -201,14 +165,14 @@ class PjmJobScheduler(sched.JobScheduler):
             )
 
             state_match = re.search(
-                r'^\s*STATE\s*:\s*(?P<state>[A-Z]+)', jobinfo, re.MULTILINE
+                r'^\s*STATE\s*:\s*(?P<state>[A-Z]+)', jobinfo.stdout, re.MULTILINE
             )
 
-            if not state_match:
-                self.log(f'Job state not found (job info follows):\n{jobinfo}')
-                continue
+            # if not state_match:
+            #     self.log(f'Job state not found (job info follows):\n{jobinfo}')
+            #     continue
 
-            state = state_match.group('state')
+            state = state_match.group('state') if state_match else 'QUE'
             job._state = JOB_STATES[state]
 
             self._cancel_if_pending_too_long(job)
@@ -246,3 +210,4 @@ class PjmJobScheduler(sched.JobScheduler):
             raise job.exception
 
         return pjm_state_completed(job.state)
+
